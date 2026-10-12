@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArcSubs · recurring USDC payments on Arc</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #101828; --muted: #667085; --line: #e4e7ec;
+    --accent: #2563eb; --accent-text: #ffffff; --ok: #067647; --warn: #b54708; --bad: #b42318;
+    --chip: #eef2f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --card: #161b22; --text: #e6e9ee; --muted: #8b95a5; --line: #262d38;
+      --accent: #5b8def; --accent-text: #0b0f14; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+      --chip: #1f2631;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--card); flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  header small { color: var(--muted); display: block; font-weight: 400; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  section h2 { font-size: 16px; margin: 0 0 4px; }
+  section > p.hint { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); flex: 1 1 140px; }
+  input, select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); min-width: 0; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .item:first-of-type { border-top: 0; }
+  .item .title { font-weight: 600; }
+  .item .meta { color: var(--muted); font-size: 13px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--chip); font-size: 12px; color: var(--muted); }
+  .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); }
+  .empty { color: var(--muted); padding: 8px 0; }
+  #status { display: flex; gap: 8px; flex-wrap: wrap; }
+  #toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(92vw, 560px); padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 14px; display: none; z-index: 5; }
+  a { color: var(--accent); }
+  code { font-size: 12px; background: var(--chip); padding: 1px 5px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ArcSubs <small>Recurring USDC payments on Arc. Pull-based, cancel any time, the contract never holds funds.</small></h1>
+  <div class="actions">
+    <span id="who" class="chip">not connected</span>
+    <button id="connect" class="primary">Connect wallet</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div id="status"></div>
+  </section>
+
+  <section>
+    <h2>Plans</h2>
+    <p class="hint">Anyone can publish a plan. Subscribing charges the first period right away; later periods can be charged by anyone once due.</p>
+    <div id="plans"></div>
+  </section>
+
+  <section>
+    <h2>Create a plan <small class="chip">you become the merchant</small></h2>
+    <p class="hint">Money goes straight from the subscriber's wallet to yours on every charge.</p>
+    <div class="row">
+      <label>Name (max 64 bytes)<input id="plan-name" maxlength="64" placeholder="Pro plan"></label>
+      <label>Price in USDC<input id="plan-price" inputmode="decimal" placeholder="9.99"></label>
+      <label>Billing period
+        <select id="plan-period">
+          <option value="60">1 minute (demo)</option>
+          <option value="3600">1 hour</option>
+          <option value="86400">1 day</option>
+          <option value="604800">7 days</option>
+          <option value="2592000" selected>30 days</option>
+        </select>
+      </label>
+      <button id="plan-create" class="primary">Create plan</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>My subscriptions</h2>
+    <p class="hint">Cancel at any time. Revoking the USDC allowance also stops billing.</p>
+    <div id="mysubs"></div>
+  </section>
+
+  <section>
+    <h2>Keeper desk <small class="chip">permissionless</small></h2>
+    <p class="hint">Charges that are due right now and can be paid. Anyone may trigger them; funds always go from the subscriber to the plan's merchant.</p>
+    <div id="due"></div>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+
+<script src="ethers.umd.min.js"></script>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const CFG = {
+  chainId: Number(params.get("chainId") || 5042),
+  rpc: params.get("rpc") || "https://rpc.mainnet.arc.io",
+  explorer: params.get("explorer") || "https://explorer.arc.io",
+  usdc: params.get("usdc") || "0x3600000000000000000000000000000000000000",
+  contract: params.get("contract") || "", // set the deployed ArcSubs address here after deployment
+  chainName: params.get("chainName") || "Arc",
+};
+const MAX_SCAN = 100;
+
+const SUBS_ABI = [
+  "function usdc() view returns (address)",
+  "function planCount() view returns (uint256)",
+  "function subscriptionCount() view returns (uint256)",
+  "function getPlan(uint256) view returns (tuple(address merchant, uint128 price, uint32 period, bool active, string name))",
+  "function getSubscription(uint256) view returns (tuple(uint256 planId, address subscriber, uint64 nextChargeAt, uint32 charges, bool active))",
+  "function canCharge(uint256) view returns (bool ok, uint8 reason)",
+  "function activeSubscriptionOf(uint256, address) view returns (uint256)",
+  "function createPlan(uint128 price, uint32 period, string name) returns (uint256)",
+  "function setPlanActive(uint256 planId, bool active)",
+  "function subscribe(uint256 planId) returns (uint256)",
+  "function cancel(uint256 subId)",
+  "function charge(uint256 subId)",
+  "error ZeroAddress()", "error InvalidPrice()", "error InvalidPeriod()", "error NameTooLong()",
+  "error UnknownPlan()", "error UnknownSubscription()", "error NotMerchant()", "error NotAuthorized()",
+  "error PlanInactive()", "error AlreadySubscribed()", "error NotActive()", "error NotDue()",
+  "error TransferFailed()", "error Reentrancy()",
+];
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address, address) view returns (uint256)",
+  "function approve(address, uint256) returns (bool)",
+];
+const ERRORS = {
+  InvalidPrice: "Price must be greater than zero.",
+  InvalidPeriod: "Billing period must be at least 60 seconds.",
+  NameTooLong: "Plan name is too long (max 64 bytes).",
+  UnknownPlan: "This plan does not exist.",
+  UnknownSubscription: "This subscription does not exist.",
+  NotMerchant: "Only the plan's merchant can do that.",
+  NotAuthorized: "Only the subscriber or the merchant can do that.",
+  PlanInactive: "This plan is paused.",
+  AlreadySubscribed: "You already have an active subscription to this plan.",
+  NotActive: "This subscription is not active.",
+  NotDue: "The next payment is not due yet.",
+  TransferFailed: "USDC transfer failed: check your balance and allowance.",
+  Reentrancy: "Blocked a re-entrant call.",
+};
+const REASONS = ["ready", "inactive", "plan paused", "not due yet", "allowance too low", "balance too low"];
+
+const $ = (id) => document.getElementById(id);
+const h = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+};
+
+const readProvider = new ethers.JsonRpcProvider(CFG.rpc, CFG.chainId, { staticNetwork: true });
+let signer = null, account = null;
+const reader = () => new ethers.Contract(CFG.contract, SUBS_ABI, signer || readProvider);
+const writer = () => new ethers.Contract(CFG.contract, SUBS_ABI, signer);
+const usdcRead = () => new ethers.Contract(CFG.usdc, ERC20_ABI, signer || readProvider);
+
+const fmtUSDC = (v) => { const s = ethers.formatUnits(v, 6); return s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") || "0" : s; };
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const fmtDate = (ts) => new Date(Number(ts) * 1000).toLocaleString();
+function period(sec) {
+  sec = Number(sec);
+  const units = [[2592000, "30 days"], [604800, "week"], [86400, "day"], [3600, "hour"], [60, "minute"]];
+  for (const [s, label] of units) if (sec % s === 0) { const n = sec / s; return n === 1 ? `every ${label}` : `every ${n} × ${label}`; }
+  return `every ${sec}s`;
+}
+let toastTimer;
+function toast(msg, ms = 4500) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = "none"), ms);
+}
+function friendly(e) {
+  if (e && (e.code === "ACTION_REJECTED" || e.code === 4001)) return "Transaction rejected in the wallet.";
+  const name = (e.revert && e.revert.name) || (e.data && safeErrName(e.data)) || (e.info && e.info.error && e.info.error.data && safeErrName(e.info.error.data));
+  if (name && ERRORS[name]) return ERRORS[name];
+  return (e && (e.shortMessage || e.reason || e.message)) || "Something went wrong";
+}
+function safeErrName(data) {
+  try { const p = new ethers.Interface(SUBS_ABI).parseError(typeof data === "string" ? data : data.result || data.data); return p && p.name; } catch { return null; }
+}
+
+async function ensureChain() {
+  const hex = "0x" + CFG.chainId.toString(16);
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
+  } catch (e) {
+    if (e && (e.code === 4902 || /Unrecognized chain|not added/i.test(e.message || ""))) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{ chainId: hex, chainName: CFG.chainName, nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, rpcUrls: [CFG.rpc], blockExplorerUrls: [CFG.explorer] }],
+      });
+    } else throw e;
+  }
+}
+async function connect() {
+  if (!window.ethereum) { toast("No wallet found. Install MetaMask, Rabby or Phantom (EVM)."); return; }
+  try {
+    await window.ethereum.request({ method: "eth_requestAccounts" });
+    await ensureChain();
+    const bp = new ethers.BrowserProvider(window.ethereum);
+    signer = await bp.getSigner();
+    account = await signer.getAddress();
+    $("who").textContent = short(account);
+    $("connect").textContent = "Connected";
+    $("connect").disabled = true;
+    await refresh();
+  } catch (e) { toast(friendly(e)); }
+}
+
+async function send(label, run) {
+  if (!signer) { toast("Connect your wallet first."); return; }
+  try {
+    toast(`${label}: confirm in your wallet…`, 60000);
+    const tx = await run();
+    toast(`${label}: waiting for confirmation…`, 60000);
+    await tx.wait();
+    toast(`${label}: done ✓`);
+    await refresh();
+  } catch (e) { toast(friendly(e), 7000); }
+}
+
+async function loadAll() {
+  const c = reader();
+  const [pc, sc] = await Promise.all([c.planCount(), c.subscriptionCount()]);
+  const plans = {};
+  const pIds = Array.from({ length: Math.min(Number(pc), MAX_SCAN) }, (_, i) => Number(pc) - i).reverse();
+  await Promise.all(pIds.map(async (id) => { plans[id] = await c.getPlan(id); }));
+  const sIds = Array.from({ length: Math.min(Number(sc), MAX_SCAN) }, (_, i) => Number(sc) - i).reverse();
+  const subs = await Promise.all(sIds.map(async (id) => {
+    const [s, cc] = await Promise.all([c.getSubscription(id), c.canCharge(id)]);
+    return { id, s, ok: cc[0], reason: Number(cc[1]) };
+  }));
+  for (const { s } of subs) if (!plans[Number(s.planId)]) plans[Number(s.planId)] = await c.getPlan(s.planId);
+  return { plans, subs, pc, sc };
+}
+
+async function refresh() {
+  if (!CFG.contract) { $("plans").replaceChildren(h("div", { class: "empty" }, "No contract configured. Open this page with ?contract=0x… or set CFG.contract.")); return; }
+  try {
+    const { plans, subs, pc, sc } = await loadAll();
+    const st = [h("span", { class: "chip" }, `${CFG.chainName} · chain ${CFG.chainId}`),
+      h("a", { class: "chip", href: `${CFG.explorer}/address/${CFG.contract}`, target: "_blank", rel: "noopener" }, `contract ${short(CFG.contract)}`),
+      h("span", { class: "chip" }, `${pc} plans · ${sc} subscriptions`)];
+    if (account) {
+      const bal = await usdcRead().balanceOf(account);
+      st.push(h("span", { class: "chip ok" }, `your USDC: ${fmtUSDC(bal)}`));
+    }
+    $("status").replaceChildren(...st);
+
+    // plans
+    const planIds = Object.keys(plans).map(Number).sort((a, b) => b - a);
+    const mine = new Set(subs.filter(({ s }) => account && s.subscriber.toLowerCase() === account.toLowerCase() && s.active).map(({ s }) => Number(s.planId)));
+    $("plans").replaceChildren(...(planIds.length ? planIds.map((id) => {
+      const p = plans[id];
+      const isMerchant = account && p.merchant.toLowerCase() === account.toLowerCase();
+      return h("div", { class: "item" },
+        h("div", {},
+          h("div", { class: "title" }, p.name || `Plan #${id}`, " ", h("span", { class: p.active ? "chip ok" : "chip warn" }, p.active ? "active" : "paused")),
+          h("div", { class: "meta" }, `${fmtUSDC(p.price)} USDC ${period(p.period)} · merchant ${short(p.merchant)}${isMerchant ? " (you)" : ""} · plan #${id}`)),
+        h("div", { class: "actions" },
+          mine.has(id) ? h("span", { class: "chip ok" }, "subscribed") : h("button", { class: "primary", disabled: !p.active, onclick: () => subscribe(id, p) }, `Subscribe · ${fmtUSDC(p.price)} USDC`),
+          isMerchant ? h("button", { onclick: () => send(p.active ? "Pause plan" : "Resume plan", () => writer().setPlanActive(id, !p.active)) }, p.active ? "Pause" : "Resume") : null));
+    }) : [h("div", { class: "empty" }, "No plans yet. Create the first one below.")]));
+
+    // my subscriptions
+    const my = subs.filter(({ s }) => account && s.subscriber.toLowerCase() === account.toLowerCase()).reverse();
+    $("mysubs").replaceChildren(...(!account ? [h("div", { class: "empty" }, "Connect your wallet to see your subscriptions.")] : my.length ? my.map(({ id, s, ok, reason }) => {
+      const p = plans[Number(s.planId)];
+      return h("div", { class: "item" },
+        h("div", {},
+          h("div", { class: "title" }, p.name || `Plan #${s.planId}`, " ", h("span", { class: s.active ? "chip ok" : "chip bad" }, s.active ? "active" : "cancelled")),
+          h("div", { class: "meta" }, `${fmtUSDC(p.price)} USDC ${period(p.period)} · paid ${s.charges}× · ${s.active ? "next charge " + fmtDate(s.nextChargeAt) : "stopped"} · #${id}`)),
+        h("div", { class: "actions" },
+          s.active && ok ? h("button", { onclick: () => send("Charge", () => writer().charge(id)) }, "Charge now") : null,
+          s.active ? h("button", { onclick: () => send("Cancel", () => writer().cancel(id)) }, "Cancel") : null));
+    }) : [h("div", { class: "empty" }, "You have no subscriptions yet.")]));
+
+    // keeper desk
+    const due = subs.filter((x) => x.ok);
+    $("due").replaceChildren(...(due.length ? due.map(({ id, s }) => {
+      const p = plans[Number(s.planId)];
+      return h("div", { class: "item" },
+        h("div", {}, h("div", { class: "title" }, `${p.name || "Plan #" + s.planId} · subscription #${id}`),
+          h("div", { class: "meta" }, `${fmtUSDC(p.price)} USDC from ${short(s.subscriber)} to ${short(p.merchant)} · due since ${fmtDate(s.nextChargeAt)}`)),
+        h("div", { class: "actions" }, h("button", { class: "primary", onclick: () => send("Charge", () => writer().charge(id)) }, "Charge")));
+    }) : [h("div", { class: "empty" }, "Nothing is due right now.")]));
+  } catch (e) { toast("Could not load contract data: " + friendly(e), 8000); }
+}
+
+async function subscribe(planId, p) {
+  if (!signer) { toast("Connect your wallet first."); return; }
+  try {
+    const owner = await signer.getAddress();
+    const need = p.price;
+    const have = await usdcRead().allowance(owner, CFG.contract);
+    if (have < need) {
+      const periods = 12n; // approve for a year of monthly billing; revoke or cancel any time
+      toast("Step 1/2: approve USDC, confirm in your wallet…", 60000);
+      const tx = await new ethers.Contract(CFG.usdc, ERC20_ABI, signer).approve(CFG.contract, need * periods);
+      await tx.wait();
+    }
+    toast("Step 2/2: subscribe, confirm in your wallet…", 60000);
+    const tx = await writer().subscribe(planId);
+    await tx.wait();
+    toast("Subscribed ✓ first period paid");
+    await refresh();
+  } catch (e) { toast(friendly(e), 7000); }
+}
+
+$("connect").addEventListener("click", connect);
+$("plan-create").addEventListener("click", () => {
+  const name = $("plan-name").value.trim();
+  let price;
+  try { price = ethers.parseUnits($("plan-price").value.trim() || "0", 6); } catch { toast("Enter a valid price, e.g. 9.99"); return; }
+  if (!name) { toast("Give the plan a name."); return; }
+  send("Create plan", () => writer().createPlan(price, Number($("plan-period").value), name));
+});
+if (window.ethereum && window.ethereum.on) {
+  window.ethereum.on("accountsChanged", () => location.reload());
+  window.ethereum.on("chainChanged", () => location.reload());
+}
+refresh();
+</script>
+</body>
+</html>
