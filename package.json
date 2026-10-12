@@ -1,0 +1,19 @@
+{
+  "name": "arc-subs",
+  "version": "1.0.0",
+  "description": "Recurring USDC payments (pull-based subscriptions) for Arc. Solidity contract, tests, and a zero-dependency web app.",
+  "scripts": {
+    "build": "node scripts/compile.js",
+    "test": "node scripts/compile.js && node --test --test-force-exit test/ArcSubs.test.js",
+    "gas": "node scripts/compile.js && node scripts/gas.js",
+    "devnet": "node scripts/compile.js && node scripts/devnet.js devnet.json",
+    "web": "python3 -m http.server 8088 --directory web"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "ethers": "^6.13.4",
+    "ganache": "^7.9.2",
+    "solc": "^0.8.28"
+  },
+  "private": true
+}
